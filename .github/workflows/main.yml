@@ -3,7 +3,8 @@ name: Build Professional Reloaded Android
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   build:
@@ -16,27 +17,68 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
           java-version: '17'
+          distribution: 'temurin'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install required SDK packages
+      - name: Extract Android project
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          echo "Looking for ZIP file..."
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          
+          if [ -z "$ZIP_FILE" ]; then
+            echo "❌ No .zip file found in the root of the repository"
+            ls -la
+            exit 1
+          fi
+          
+          echo "✅ Found ZIP: $ZIP_FILE"
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+          
+          echo "Contents of extracted:"
+          find extracted -maxdepth 3 -type f | head -20
+          
+          # Find the Gradle project root
+          PROJECT_DIR=\( (dirname " \)(find extracted -name "settings.gradle*" -o -name "build.gradle*" | head -n 1)")
+          
+          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "." ]; then
+            echo "❌ Could not find a Gradle project inside the ZIP"
+            exit 1
+          fi
+          
+          echo "✅ Project found at: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+
+      - name: Grant execute permission to gradlew
+        run: |
+          if [ -f "$PROJECT_DIR/gradlew" ]; then
+            chmod +x "$PROJECT_DIR/gradlew"
+            echo "Using project's gradlew"
+          else
+            echo "No gradlew found – will use system Gradle"
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      - name: Build Debug + Release APKs
+        run: |
+          cd "$PROJECT_DIR"
+          
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug assembleRelease --stacktrace
+          else
+            gradle assembleDebug assembleRelease --stacktrace
+          fi
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: Professional-Reloaded-APK
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          name: Professional-Reloaded-APKs
+          path: |
+            extracted/**/build/outputs/apk/**/*.apk
+            **/*.apk
+          if-no-files-found: warn
