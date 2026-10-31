@@ -3,8 +3,7 @@ name: Build Professional Reloaded Android
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   build:
@@ -23,62 +22,59 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Extract Android project
+      - name: Install required Android SDK packages
         run: |
-          echo "Looking for ZIP file..."
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Extract Android project from ZIP
+        run: |
+          echo "=== Repository contents ==="
+          ls -la
+
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-          
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "❌ No .zip file found in the root of the repository"
-            ls -la
+            echo "❌ ERROR: No .zip file found in the root of the repository"
             exit 1
           fi
-          
+
           echo "✅ Found ZIP: $ZIP_FILE"
           mkdir -p extracted
           unzip -q "$ZIP_FILE" -d extracted
-          
-          echo "Contents of extracted:"
-          find extracted -maxdepth 3 -type f | head -20
-          
-          # Find the Gradle project root
-          PROJECT_DIR=\( (dirname " \)(find extracted -name "settings.gradle*" -o -name "build.gradle*" | head -n 1)")
-          
-          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "." ]; then
-            echo "❌ Could not find a Gradle project inside the ZIP"
+
+          echo "=== Extracted contents ==="
+          find extracted -maxdepth 4 -type f
+
+          # Locate the real project root (where settings.gradle* lives)
+          SETTINGS_FILE=$(find extracted -name "settings.gradle*" | head -n 1)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "❌ ERROR: Could not find settings.gradle or settings.gradle.kts inside the ZIP"
             exit 1
           fi
-          
-          echo "✅ Project found at: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
-      - name: Grant execute permission to gradlew
-        run: |
-          if [ -f "$PROJECT_DIR/gradlew" ]; then
-            chmod +x "$PROJECT_DIR/gradlew"
-            echo "Using project's gradlew"
-          else
-            echo "No gradlew found – will use system Gradle"
-          fi
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "✅ Project directory: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'   # Matches AGP 8.7.3 requirement
 
-      - name: Build Debug + Release APKs
+      - name: Build Debug APK
         run: |
           cd "$PROJECT_DIR"
-          
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug assembleRelease --stacktrace
-          else
-            gradle assembleDebug assembleRelease --stacktrace
-          fi
+          echo "Building from directory: $(pwd)"
+          echo "Files in project root:"
+          ls -la
 
-      - name: Upload APKs
+          # No gradlew in the ZIP, so we use the Gradle installed by setup-gradle
+          gradle --no-daemon assembleDebug --stacktrace
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Professional-Reloaded-APKs
-          path: |
-            extracted/**/build/outputs/apk/**/*.apk
-            **/*.apk
-          if-no-files-found: warn
+          name: Professional-Reloaded-APK
+          path: extracted/**/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
